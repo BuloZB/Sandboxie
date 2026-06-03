@@ -12,6 +12,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changed
 - disabled rich text acceptance in 'Edit ini Section' [baa6968](https://github.com/sandboxie-plus/Sandboxie/commit/baa6968420e0ebd6b4cd93821cf019fcd0e0fc35)
 
+### Fixed
+- fixed crash in VMware when running inside sandbox caused by NtQueryDirectoryObject hook returning non-null-terminated strings and uninitialized padding bytes in OBJECT_DIRECTORY_INFORMATION structures, which caused QueryDosDeviceW to crash in wcscmp [#5390](https://github.com/sandboxie-plus/Sandboxie/issues/5390)
+- Add short-name fallback cache and heuristics [#5404](https://github.com/sandboxie-plus/Sandboxie/pull/5404)
+- fixed addon setup not working introduced in a recent build
+
 
 
 ## [1.17.6 / 5.72.6] - 2026-05-17
@@ -26,7 +31,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   - the new format is 1:1 compatible with portable boxes, allowing to just unpack an export archive and add the boxes as portable
 
 ### Fixed
-- fixed issue with hook registration
+- FIXED SECURITY ISSUE ID-40: issue with APC injection vulnerability
 - fixed high CPU usage caused by DWM with applications using custom title bars (e.g., Delphi VCL)
 
 
