@@ -22,6 +22,7 @@
 #include "Helpers/IniHighlighter.h"
 #include "../MiscHelpers/Common/CheckableMessageBox.h"
 #include <QFileIconProvider>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QSet>
 
@@ -170,6 +171,13 @@ Qt::CheckState CSettingsWindow__Int2Chk(int state)
 	default:
 	case 2: return Qt::PartiallyChecked;
 	}
+}
+
+static bool CSettingsWindow__IsPendingHighlightEnabled(Qt::CheckState state)
+{
+	if (state == Qt::PartiallyChecked)
+		return theConf->GetInt("Options/ViewMode", 1) != 2;
+	return state == Qt::Checked;
 }
 
 quint32 g_FeatureFlags = 0;
@@ -595,6 +603,7 @@ CSettingsWindow::CSettingsWindow(QWidget* parent)
 	connect(ui.chkColorIcons, SIGNAL(stateChanged(int)), this, SLOT(OnChangeGUI()));
 	connect(ui.chkOverlayIcons, SIGNAL(stateChanged(int)), this, SLOT(OnChangeGUI()));
 	connect(ui.chkHideCore, SIGNAL(stateChanged(int)), this, SLOT(OnOptChanged()));
+	connect(ui.chkHighlightPendingChanges, SIGNAL(stateChanged(int)), this, SLOT(OnOptChanged()));
 	connect(ui.cmbGrouping, SIGNAL(currentIndexChanged(int)), this, SLOT(OnOptChanged()));
 	connect(ui.cmbLaunchMonitor, SIGNAL(currentIndexChanged(int)), this, SLOT(OnOptChanged()));
 	connect(ui.cmbNonMainLaunchMonitor, SIGNAL(currentIndexChanged(int)), this, SLOT(OnOptChanged()));
@@ -719,6 +728,7 @@ CSettingsWindow::CSettingsWindow(QWidget* parent)
 
 	connect(ui.chkSandboxMoTW, SIGNAL(stateChanged(int)), this, SLOT(OnMoTWChange()));
 	connect(ui.cmbMoTWSandbox, SIGNAL(currentIndexChanged(int)), this, SLOT(OnMoTWChange()));
+	connect(ui.chkForceBoxDocs, SIGNAL(stateChanged(int)), this, SLOT(OnOptChanged()));
 
 	// USB
 	connect(ui.chkSandboxUsb, SIGNAL(stateChanged(int)), this, SLOT(OnVolumeChanged()));
@@ -852,14 +862,16 @@ CSettingsWindow::CSettingsWindow(QWidget* parent)
 		m_pCodeEdit->SetCompleter(nullptr);
 	}
 	
-	m_pCodeEdit->SetCompletionFilterCallback([](const QString& keyName) -> bool {
-		return CIniHighlighter::IsKeyHiddenFromPopup(keyName);
+	m_pCodeEdit->SetCompletionFilterCallback([](const QString& keyName, const QString& inputKey) -> bool {
+		return CIniHighlighter::IsKeyHiddenFromPopup(keyName)
+			|| CIniHighlighter::ShouldHideCompletionCandidate(inputKey, keyName, 'p');
 		});
 	m_pCodeEdit->SetCaseCorrectionCallback([](const QString& wrongKey) -> QString {
 		return CIniHighlighter::FindCaseCorrectedKey(wrongKey);
 		});
-	m_pCodeEdit->SetCaseCorrectionFilterCallback([](const QString& keyName) -> bool {
-		return CIniHighlighter::IsKeyHiddenFromContext(keyName, 'c');
+	m_pCodeEdit->SetCaseCorrectionFilterCallback([](const QString& keyName, const QString& inputKey) -> bool {
+		return CIniHighlighter::IsKeyHiddenFromContext(keyName, 'c')
+			|| CIniHighlighter::ShouldHideCompletionCandidate(inputKey, keyName, 'c');
 		});
 	m_pCodeEdit->SetPopupTooltipCallback([](const QString& keyName) -> QString {
 		return CIniHighlighter::GetSettingTooltipForPopup(keyName);
@@ -1074,6 +1086,7 @@ bool CSettingsWindow::eventFilter(QObject *source, QEvent *event)
 		static bool m_bRightButtonPressed = false;
 
 		if (event->type() == QEvent::FocusIn && ui.txtCertificate->property("hidden").toBool())	{
+			QSignalBlocker Blocker(ui.txtCertificate);
 			ui.txtCertificate->setProperty("hidden", false);
 			ui.txtCertificate->setPlainText(g_Certificate);
 			ui.txtCertificate->setProperty("modified", false);
@@ -1083,6 +1096,7 @@ bool CSettingsWindow::eventFilter(QObject *source, QEvent *event)
 		}
 		else if (event->type() == QEvent::FocusOut && !ui.txtCertificate->property("hidden").toBool()) {
 			if (!ui.txtCertificate->property("modified").toBool() && !m_bRightButtonPressed) {
+				QSignalBlocker Blocker(ui.txtCertificate);
 				ui.txtCertificate->setProperty("hidden", true);
 				int Pos = g_Certificate.indexOf("HWID:");
 				if (Pos == -1)
@@ -1375,6 +1389,8 @@ void CSettingsWindow::LoadSettings()
 	ui.chkColorIcons->setChecked(theConf->GetBool("Options/ColorBoxIcons", false));
 	ui.chkOverlayIcons->setChecked(theConf->GetBool("Options/UseOverlayIcons", true));
 	ui.chkHideCore->setChecked(theConf->GetBool("Options/HideSbieProcesses", false));
+	ui.chkHighlightPendingChanges->setCheckState(CSettingsWindow__Int2Chk(theConf->GetInt("Options/HighlightPendingChanges", 2)));
+	m_PendingChanges.SetEnabled(CSettingsWindow__IsPendingHighlightEnabled(ui.chkHighlightPendingChanges->checkState()), m_pTree);
 	ui.cmbGrouping->setCurrentIndex(theConf->GetInt("Options/BoxGroupHandling", 0));
 	
 
@@ -1595,6 +1611,7 @@ void CSettingsWindow::LoadSettings()
 
 		QString MoTWBox = theAPI->GetGlobalSettings()->GetText("MarkOfTheWebBox", "Web_Box");
 		ui.chkSandboxMoTW->setChecked(theAPI->GetGlobalSettings()->GetBool("ForceMarkOfTheWeb", false));
+		ui.chkForceBoxDocs->setChecked(theAPI->GetGlobalSettings()->GetBool("ForceBoxDocs", false));
 		QString USBBox = theAPI->GetGlobalSettings()->GetText("UsbSandbox", "USB_Box");
 		ui.chkSandboxUsb->setChecked(theAPI->GetGlobalSettings()->GetBool("ForceUsbDrives", false));
 
@@ -1671,6 +1688,7 @@ void CSettingsWindow::LoadSettings()
 		ui.btnAddWarnProg->setEnabled(false);
 		ui.btnDelWarnProg->setEnabled(false);
 		ui.chkSandboxMoTW->setEnabled(false);
+		ui.chkForceBoxDocs->setEnabled(false);
 		ui.cmbMoTWSandbox->setEnabled(false);
 		ui.chkSandboxUsb->setEnabled(false);
 		ui.cmbUsbSandbox->setEnabled(false);
@@ -1728,6 +1746,10 @@ void CSettingsWindow::LoadSettings()
 
 	//ui.chkUpdateTemplates->setEnabled(g_CertInfo.active && !g_CertInfo.expired);
 	ui.chkUpdateIssues->setEnabled(g_CertInfo.active && !g_CertInfo.expired);
+	m_PendingChanges.CaptureItemBaselines(m_pTree);
+	m_PendingChanges.CaptureCheckboxBaselines();
+	m_PendingChanges.CaptureRadioButtonBaselines();
+	m_PendingChanges.CaptureValueBaselines();
 }
 
 void CSettingsWindow::OnRamDiskChange()
@@ -1951,6 +1973,7 @@ void CSettingsWindow::SaveSettings()
 	theConf->SetValue("Options/ColorBoxIcons", ui.chkColorIcons->isChecked());
 	theConf->SetValue("Options/UseOverlayIcons", ui.chkOverlayIcons->isChecked());
 	theConf->SetValue("Options/HideSbieProcesses", ui.chkHideCore->isChecked());
+	theConf->SetValue("Options/HighlightPendingChanges", CSettingsWindow__Chk2Int(ui.chkHighlightPendingChanges->checkState()));
 	theConf->SetValue("Options/BoxGroupHandling", ui.cmbGrouping->currentIndex());
 
 	CIniHighlighter::ClearLanguageCache();
@@ -2227,6 +2250,7 @@ void CSettingsWindow::SaveSettings()
 			}
 
 			WriteAdvancedCheck(ui.chkSandboxMoTW, "ForceMarkOfTheWeb", "y", "");
+			WriteAdvancedCheck(ui.chkForceBoxDocs, "ForceBoxDocs", "y", "");
 
 			QString MoTWSandbox = ui.cmbMoTWSandbox->currentData().toString();
 			SB_STATUS Status = theAPI->ValidateName(MoTWSandbox);
@@ -2363,6 +2387,14 @@ void CSettingsWindow::OnOptChanged()
 	item = model->item(3);
 	item->setFlags((ui.cmbSysTray->currentIndex() != 0) ? item->flags() & ~Qt::ItemIsEnabled : item->flags() | Qt::ItemIsEnabled);
 
+	if (sender() == ui.chkHighlightPendingChanges) {
+		m_PendingChanges.SetEnabled(CSettingsWindow__IsPendingHighlightEnabled(ui.chkHighlightPendingChanges->checkState()), m_pTree);
+		if (!m_HoldChange)
+			m_PendingChanges.UpdateAll(m_pTree);
+	}
+	else if (!m_HoldChange)
+		m_PendingChanges.Update(sender(), m_pTree);
+
 	if (m_HoldChange)
 		return;
 	ui.buttonBox->button(QDialogButtonBox::Apply)->setEnabled(true);
@@ -2401,6 +2433,7 @@ void CSettingsWindow::OnLoadAddon()
 		connect(pLabel, SIGNAL(linkActivated(const QString&)), theGUI, SLOT(OpenUrl(const QString&)));
 		ui.treeAddons->setItemWidget(pItem, 3, pLabel);
 	}
+	m_PendingChanges.CaptureItemBaselines(m_pTree, ui.treeAddons);
 }
 
 void CSettingsWindow::OnInstallAddon()
@@ -2524,6 +2557,7 @@ void CSettingsWindow::OnCompat()
 	}
 
 	m_CompatLoaded = 1;
+	m_PendingChanges.CaptureItemBaselines(m_pTree, ui.treeCompat);
 	if(bNew)
 		OnCompatChanged();
 
@@ -2793,6 +2827,8 @@ void CSettingsWindow::LoadTemplates()
 		pItem->setText(0, Title);
 		ui.treeTemplates->addTopLevelItem(pItem);
 	}
+
+	m_PendingChanges.CaptureItemBaselines(m_pTree, ui.treeTemplates);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3115,6 +3151,8 @@ void CSettingsWindow::InitSupport()
 	connect(ui.lblInsiderInfo, SIGNAL(linkActivated(const QString&)), theGUI, SLOT(OpenUrl(const QString&)));
 
 	m_CertChanged = false;
+	m_PendingChanges.ExcludeValue(ui.txtCertificate);
+	m_PendingChanges.ExcludeValue(ui.txtSerial);
 	connect(ui.txtCertificate, SIGNAL(textChanged()), this, SLOT(CertChanged()));
 	ui.txtCertificate->installEventFilter(this);
 	connect(ui.txtSerial, SIGNAL(textChanged(const QString&)), this, SLOT(KeyChanged()));
@@ -3208,7 +3246,9 @@ void CSettingsWindow::UpdateCert()
 		int datePos = truncatedCert.indexOf("DATE:");
 		if (namePos != -1 && datePos != -1 && datePos > namePos)
 			truncatedCert = truncatedCert.mid(0, namePos + 5) + " ...\n" + truncatedCert.mid(datePos);
+		QSignalBlocker Blocker(ui.txtCertificate);
 		ui.txtCertificate->setPlainText(truncatedCert);
+		ui.txtCertificate->setProperty("modified", false);
 		//ui.lblSupport->setVisible(false);
 
 		QString ReNewUrl = "https://sandboxie-plus.com/go.php?to=sbie-renew-cert";
@@ -3774,11 +3814,8 @@ void CSettingsWindow::OnEditorSettings()
 		
 		// Apply settings that don't have UI checkboxes in SettingsWindow
 		// These are managed via EditorSettings only
-		if (editorWindow.HasResetOccurred()) {
-			// If any reset occurred, update these settings from config
-			bool fuzzyEnabled = theConf->GetBool("Options/EnableFuzzyMatching", false);
-			m_pCodeEdit->SetFuzzyMatchingEnabled(fuzzyEnabled);
-		}
+		bool fuzzyEnabled = theConf->GetBool("Options/EnableFuzzyMatching", false);
+		m_pCodeEdit->SetFuzzyMatchingEnabled(fuzzyEnabled);
 		
 		// Always update autocompletion list regardless of reset status
 		UpdateAutoCompletion();

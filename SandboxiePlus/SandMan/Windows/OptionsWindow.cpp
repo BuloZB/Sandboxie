@@ -475,14 +475,16 @@ COptionsWindow::COptionsWindow(const QSharedPointer<CSbieIni>& pBox, const QStri
 		m_pCodeEdit->SetCompleter(nullptr);
 	}
 
-	m_pCodeEdit->SetCompletionFilterCallback([](const QString& keyName) -> bool {
-		return CIniHighlighter::IsKeyHiddenFromPopup(keyName);
+	m_pCodeEdit->SetCompletionFilterCallback([](const QString& keyName, const QString& inputKey) -> bool {
+		return CIniHighlighter::IsKeyHiddenFromPopup(keyName)
+			|| CIniHighlighter::ShouldHideCompletionCandidate(inputKey, keyName, 'p');
 		});
 	m_pCodeEdit->SetCaseCorrectionCallback([](const QString& wrongKey) -> QString {
 		return CIniHighlighter::FindCaseCorrectedKey(wrongKey);
 		});
-	m_pCodeEdit->SetCaseCorrectionFilterCallback([](const QString& keyName) -> bool {
-		return CIniHighlighter::IsKeyHiddenFromContext(keyName, 'c');
+	m_pCodeEdit->SetCaseCorrectionFilterCallback([](const QString& keyName, const QString& inputKey) -> bool {
+		return CIniHighlighter::IsKeyHiddenFromContext(keyName, 'c')
+			|| CIniHighlighter::ShouldHideCompletionCandidate(inputKey, keyName, 'c');
 		});
 	m_pCodeEdit->SetPopupTooltipCallback([](const QString& keyName) -> QString {
 		return CIniHighlighter::GetSettingTooltipForPopup(keyName);
@@ -624,6 +626,7 @@ COptionsWindow::COptionsWindow(const QSharedPointer<CSbieIni>& pBox, const QStri
 
 	// Recovery
 	connect(ui.chkAutoRecovery, SIGNAL(clicked(bool)), this, SLOT(OnRecoveryChanged()));
+	connect(ui.chkUseIgnoreForQuick, SIGNAL(clicked(bool)), this, SLOT(OnRecoveryChanged()));
 	connect(ui.btnAddRecovery, SIGNAL(clicked(bool)), this, SLOT(OnAddRecFolder()));
 	connect(ui.btnDelRecovery, SIGNAL(clicked(bool)), this, SLOT(OnDelRecEntry()));
 	connect(ui.btnAddRecIgnore, SIGNAL(clicked(bool)), this, SLOT(OnAddRecIgnore()));
@@ -808,6 +811,7 @@ void COptionsWindow::OnOptChanged()
 {
 	if (m_HoldChange)
 		return;
+	m_PendingChanges.Update(sender(), m_pTree);
 	ui.buttonBox->button(QDialogButtonBox::Apply)->setEnabled(true);
 }
 
@@ -1076,8 +1080,13 @@ void COptionsWindow::WriteGlobalCheck(QCheckBox* pCheck, const QString& Setting,
 void COptionsWindow::LoadConfig()
 {
 	m_ConfigDirty = false;
+	m_StartRadioBaselineLoaded = false;
 
 	m_HoldChange = true;
+	int iHighlightPendingChanges = theConf->GetInt("Options/HighlightPendingChanges", 2);
+	if (iHighlightPendingChanges == 2)
+		iHighlightPendingChanges = theConf->GetInt("Options/ViewMode", 1) != 2 ? 1 : 0;
+	m_PendingChanges.SetEnabled(iHighlightPendingChanges != 0, m_pTree);
 
 	LoadTemplates();
 
@@ -1108,6 +1117,10 @@ void COptionsWindow::LoadConfig()
 
 	// Update autocompletion after all settings are loaded
 	UpdateAutoCompletion();
+	m_PendingChanges.CaptureItemBaselines(m_pTree);
+	m_PendingChanges.CaptureCheckboxBaselines();
+	m_PendingChanges.CaptureRadioButtonBaselines();
+	m_PendingChanges.CaptureValueBaselines();
 
 	m_HoldChange = false;
 }
@@ -1450,6 +1463,13 @@ void COptionsWindow::UpdateCurrentTab()
 		CopyGroupToList("<StartRunAccessDisabled>", ui.treeStart, true);
 
 		OnRestrictStart();
+		m_PendingChanges.CaptureItemBaselines(m_pTree, ui.treeStart);
+		if (!m_StartRadioBaselineLoaded) {
+			m_PendingChanges.CaptureRadioButtonBaseline(ui.radStartAll);
+			m_PendingChanges.CaptureRadioButtonBaseline(ui.radStartExcept);
+			m_PendingChanges.CaptureRadioButtonBaseline(ui.radStartSelected);
+			m_StartRadioBaselineLoaded = true;
+		}
 	}
 	else if (m_pCurrentTab == ui.tabInternet || m_pCurrentTab == ui.tabINet || m_pCurrentTab == ui.tabNetConfig)
 	{
@@ -1687,11 +1707,8 @@ void COptionsWindow::OnEditorSettings()
 		
 		// Apply settings that don't have UI checkboxes in OptionsWindow
 		// These are managed via EditorSettings only
-		if (editorWindow.HasResetOccurred()) {
-			// If any reset occurred, update these settings from config
-			bool fuzzyEnabled = theConf->GetBool("Options/EnableFuzzyMatching", false);
-			m_pCodeEdit->SetFuzzyMatchingEnabled(fuzzyEnabled);
-		}
+		bool fuzzyEnabled = theConf->GetBool("Options/EnableFuzzyMatching", false);
+		m_pCodeEdit->SetFuzzyMatchingEnabled(fuzzyEnabled);
 		
 		// Always update autocompletion list regardless of reset status
 		UpdateAutoCompletion();
